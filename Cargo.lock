@@ -1241,9 +1241,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_platform"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3120670bb2308980f723477c9d82476fcda31f08be9b256c3f0acdee82a65094"
+checksum = "fd610a417e7b4a3b9602cf11264d16cbbff8eabe689c5fed8be4e84c6a2680a3"
 dependencies = [
  "critical-section",
  "foldhash 0.2.0",
@@ -1717,9 +1717,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_utils"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3aceea6c7ffdd568f866d5ca4dfe50c33440c54f7bc230c13a9ba7ab0c91aed1"
+checksum = "de51fa7ea2e95d4c2d1278c5629285d59eec951cc60c992964c03f30910ef5a1"
 dependencies = [
  "async-channel",
  "bevy_platform",
@@ -4554,6 +4554,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_ecs",
+ "bevy_utils",
 ]
 
 [[package]]

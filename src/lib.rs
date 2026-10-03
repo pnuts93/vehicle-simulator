@@ -1,56 +1,7 @@
 use bevy::prelude::*;
 
-pub struct MovableConfig {
-    pub speed: f32,
-    pub spawn: Vec3,
-    pub direction: Quat,
-}
-
-pub trait Movable {
-    fn new(config: &MovableConfig) -> Self;
-    fn get_speed(&self) -> f32;
-    fn get_spawn(&self) -> Vec3;
-}
-
-#[derive(Component)]
-pub struct Vehicle {
-    spawn: Vec3,
-    speed: f32,
-    direction: Quat,
-}
-
-impl Movable for Vehicle {
-    fn new(config: &MovableConfig) -> Self {
-        Self {
-            spawn: config.spawn,
-            speed: config.speed,
-            direction: config.direction,
-        }
-    }
-
-    fn get_speed(&self) -> f32 {
-        self.speed
-    }
-
-    fn get_spawn(&self) -> Vec3 {
-        self.spawn
-    }
-}
-
-impl Vehicle {
-    pub fn move_x(&mut self, units: f32) {
-        self.spawn.x -= units;
-    }
-
-    pub fn move_z(&mut self, units: f32) {
-        self.spawn.z -= units;
-    }
-
-    pub fn rotate(&mut self, delta_yaw: f32, _delta_pitch: f32, _delta_roll: f32) {
-        self.direction =
-            (self.direction * Quat::from_euler(EulerRot::YXZ, delta_yaw, 0., 0.)).normalize();
-    }
-}
+pub mod state;
+pub mod vehicle;
 
 #[derive(Debug, Component, Deref, DerefMut)]
 pub struct CameraSensitivity(Vec2);
@@ -75,8 +26,8 @@ impl CameraSettings {
         }
     }
 
-    pub fn get_position(&self, vehicle: &Vehicle) -> Vec3 {
-        vehicle.direction * self.offset.offset() + vehicle.get_spawn()
+    pub fn get_position(&self, direction: Quat, spawn: Vec3) -> Vec3 {
+        direction * self.offset.offset() + spawn
     }
 }
 
