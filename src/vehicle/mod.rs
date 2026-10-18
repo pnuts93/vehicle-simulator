@@ -1,6 +1,9 @@
 pub mod cube;
+pub mod physics;
 
 use bevy::prelude::*;
+
+use physics::{Engine, Suspension, Tyre, WheelMount, WheelState};
 
 #[derive(Debug, Default)]
 pub enum VehicleType {
@@ -42,28 +45,51 @@ impl Vehicle {
     }
 }
 
+/// Physical description of a wheeled vehicle; see [`physics`].
 #[derive(Component)]
 pub struct VehicleConfig {
-    pub gears: Vec<GearConfig>, // index 0 = 1st gear, etc.
-    pub n: f32,                 // curve exponent (shared across gears for now)
-    pub reverse: GearConfig,    // reverse has its own (weaker) accel/max
-    pub coast_decel: f32,       // drag toward 0 when no input
-    pub brake_decel: f32,       // toward 0 when braking
-    pub shift_up_ratio: f32,    // e.g. shift up at 0.9 * gear's max_velocity
-    pub shift_down_ratio: f32,  // e.g. shift down below 0.4 * lower gear's max
+    pub wheels: Vec<WheelMount>,
+    pub suspension: Suspension,
+    pub tyre: Tyre,
+    pub engine: Engine,
+    /// Steering angle of the steered wheels at full lock, in rad.
+    pub max_steer_angle: f32,
+    /// How fast the steering moves to full lock and back, in units of [`DriveInput::steer`] per s.
+    pub steer_rate: f32,
+    /// Drag coefficient times frontal area, in m².
+    pub drag_area: f32,
 }
 
-#[derive(Clone, Copy)]
-pub struct GearConfig {
-    pub max_acceleration: f32,
-    pub max_velocity: f32,
-}
-
-#[derive(Component, Default)]
+/// Simulation state of each wheel, in the same order as [`VehicleConfig::wheels`].
+#[derive(Component)]
 pub struct VehicleState {
-    pub current_gear: usize, // index into config.gears (ignored if velocity < 0 → reverse)
-    pub velocity: f32,       // signed: + forward, - reverse; single source of truth for direction
-    pub throttle: f32,       // ramped input value, 0..1 (from the earlier ramping design)
+    pub wheels: Vec<WheelState>,
+}
+
+impl VehicleState {
+    pub fn new(config: &VehicleConfig) -> Self {
+        Self {
+            wheels: vec![WheelState::default(); config.wheels.len()],
+        }
+    }
+}
+
+/// Driver controls as continuous values. Unlike [`VehicleIntent`] they are held between frames,
+/// so every fixed physics step sees them.
+#[derive(Component, Default)]
+pub struct DriveInput {
+    /// -1 (full reverse) to 1 (full forward).
+    pub throttle: f32,
+    /// 0 to 1.
+    pub brake: f32,
+    /// -1 (full right) to 1 (full left).
+    pub steer: f32,
+}
+
+/// `rotation` reduced to its rotation about the world Y axis.
+pub fn heading(rotation: Quat) -> Quat {
+    let forward = rotation * Vec3::Z;
+    Quat::from_rotation_y(forward.x.atan2(forward.z))
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]

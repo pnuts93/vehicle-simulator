@@ -1,3 +1,4 @@
+use avian3d::prelude::*;
 use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     prelude::*,
@@ -8,9 +9,11 @@ use simulator::{
     radial_menu::{Icon, OptionConfig, RadialMenuAppExt, RadialMenuPlugin, RadialMenuState},
     state::{AppState, PauseState},
     style::{self, StylePlugin},
+    surface::Surface,
     vehicle::{
-        CameraIntent, ControlProfile, Controlled, LiftMode, MouseMode, ThrottleMode, Vehicle,
-        VehicleConfig, VehicleIntent, VehicleState, cube::Cube,
+        CameraIntent, ControlProfile, Controlled, DriveInput, LiftMode, MouseMode, ThrottleMode,
+        Vehicle, VehicleConfig, VehicleIntent, VehicleState, cube::Cube, heading,
+        physics::VehiclePhysicsPlugin,
     },
     vehicle_picker::{CubeAssets, VehiclePickerPlugin, VehiclePickerState},
 };
@@ -24,6 +27,7 @@ fn main() {
             StylePlugin,
             RadialMenuPlugin,
             VehiclePickerPlugin,
+            VehiclePhysicsPlugin,
             Simulator,
         ))
         .run();
@@ -50,8 +54,9 @@ impl Plugin for Simulator {
                     (gather_vehicle_input, gather_camera_input)
                         .run_if(in_state(RadialMenuState::Closed))
                         .run_if(in_state(VehiclePickerState::Closed)),
-                    drive_cube,
+                    (apply_drive_input, follow_camera),
                 )
+                    .chain()
                     .run_if(in_state(PauseState::Running)),
                 handle_pause_menu.run_if(in_state(PauseState::Paused)),
             ),
@@ -76,7 +81,9 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     cube: Res<CubeAssets>,
 ) {
-    let vehicle = Vehicle::new(Vec3::ZERO + Vec3::new(0., 0.5, 0.), 2., Quat::default());
+    // Spawned a little above its resting ride height, so it settles onto its suspension.
+    let vehicle = Vehicle::new(Vec3::new(0., 1., 0.), 2., Quat::default());
+    let vehicle_config = Cube::generate_vehicle_config();
     let camera_settings = CameraSettings::default();
     // Resources
     commands.insert_resource(MouseMode::CameraAndSteer);
@@ -98,10 +105,12 @@ fn setup(
         vehicle,
         Cube {},
         Controlled {},
+        Cube::generate_rigid_body(),
         Cube::generate_control_profile(),
-        Cube::generate_vehicle_config(),
+        VehicleState::new(&vehicle_config),
+        vehicle_config,
         VehicleIntent::default(),
-        VehicleState::default(),
+        DriveInput::default(),
     ));
     // sky
     commands.spawn((
@@ -118,10 +127,26 @@ fn setup(
         Mesh3d(meshes.add(Cylinder::new(1.0, 5.0))),
         MeshMaterial3d(materials.add(Color::srgb_u8(25, 255, 25))),
         Transform::from_xyz(2., 0., 0.),
+        RigidBody::Static,
+        Collider::cylinder(1.0, 5.0),
     ));
+    // ramp, rising towards +Z, to test the suspension
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::new(4., 0.5, 8.))),
+        MeshMaterial3d(materials.add(Color::srgb_u8(120, 120, 140))),
+        Transform::from_xyz(0., 0., 20.).with_rotation(Quat::from_rotation_x(-0.2)),
+        RigidBody::Static,
+        Collider::cuboid(4., 0.5, 8.),
+        Surface::CONCRETE,
+    ));
+    // ground: the collider is built from whatever mesh is attached, so swapping the plane for
+    // terrain needs no collider changes
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(50.)))),
         MeshMaterial3d(materials.add(Color::WHITE)),
+        RigidBody::Static,
+        ColliderConstructor::TrimeshFromMesh,
+        Surface::ASPHALT,
     ));
     // light
     commands.spawn((PointLight { ..default() }, Transform::from_xyz(0., 10., 0.)));
@@ -259,108 +284,63 @@ fn gather_camera_input(
     }
 }
 
-fn drive_cube(
+/// Turns this frame's [`VehicleIntent`] into the held [`DriveInput`] the physics steps read.
+fn apply_drive_input(
     time: Res<Time>,
-    mut q_vehicle: Query<
+    mut q: Query<
         (
-            &mut Transform,
-            &mut VehicleState,
             &mut VehicleIntent,
+            &mut DriveInput,
             &VehicleConfig,
+            &Transform,
+            &LinearVelocity,
         ),
-        (With<Cube>, Without<Camera3d>),
-    >,
-    mut q_camera: Query<
-        (&mut Transform, &mut CameraSettings, &mut CameraIntent),
-        (With<Camera3d>, Without<Cube>),
+        With<Controlled>,
     >,
 ) {
-    let vehicle_spawn;
-    let vehicle_direction;
-    let vehicle_change;
-    if let Ok((mut transform, mut vehicle_state, mut vehicle_intent, vehicle_config)) =
-        q_vehicle.single_mut()
-    {
-        throttle(
-            vehicle_config,
-            &mut vehicle_state,
-            &vehicle_intent.throttle,
-            time.delta_secs(),
-        );
-        transform.rotate_local(Quat::from_euler(
-            EulerRot::XYZ,
-            0.,
-            vehicle_intent.yaw * 0.05,
-            0.,
-        ));
-        let rotation = transform.rotation;
-        transform.translation += rotation.normalize()
-            * Vec3 {
-                x: vehicle_intent.lateral as f32 * 0.05,
-                y: vehicle_intent.lift as f32,
-                z: vehicle_state.velocity * time.delta_secs(),
-            };
-        vehicle_spawn = transform.translation;
-        vehicle_direction = transform.rotation;
-        vehicle_intent.reset();
-        vehicle_change = true;
-    } else {
+    let Ok((mut intent, mut input, config, transform, velocity)) = q.single_mut() else {
         return;
+    };
+    let direction = match intent.throttle {
+        ThrottleMode::Forth => 1.,
+        ThrottleMode::Back => -1.,
+        ThrottleMode::None => 0.,
+    };
+    let forward_speed = velocity.dot(transform.rotation * Vec3::Z);
+    // Pushing against the direction of travel brakes; once nearly stopped it drives that way.
+    if direction * forward_speed < 0. && forward_speed.abs() > 0.5 {
+        input.throttle = 0.;
+        input.brake = 1.;
+    } else {
+        input.throttle = direction;
+        input.brake = 0.;
     }
-    if let Ok((mut transform, mut camera_settings, mut camera_intent)) = q_camera.single_mut()
-        && (!camera_intent.is_default() || vehicle_change)
-    {
-        transform.translation = camera_settings.get_position(vehicle_direction, vehicle_spawn);
-        transform.rotation = transform.looking_at(vehicle_spawn, Vec3::Y).rotation;
-        if camera_intent.zoom > 0 {
-            camera_settings.offset.increase();
-        } else if camera_intent.zoom < 0 {
-            camera_settings.offset.decrease();
-        }
-        camera_intent.reset();
-    }
+    let target_steer = (intent.lateral as f32).clamp(-1., 1.);
+    let max_delta = config.steer_rate * time.delta_secs();
+    input.steer += (target_steer - input.steer).clamp(-max_delta, max_delta);
+    intent.reset();
 }
 
-fn throttle(
-    vehicle_config: &VehicleConfig,
-    vehicle_state: &mut VehicleState,
-    throttle: &ThrottleMode,
-    dt: f32,
+fn follow_camera(
+    q_vehicle: Query<&Transform, (With<Controlled>, Without<Camera3d>)>,
+    mut q_camera: Query<
+        (&mut Transform, &mut CameraSettings, &mut CameraIntent),
+        (With<Camera3d>, Without<Controlled>),
+    >,
 ) {
-    let accel_intent = matches!(throttle, ThrottleMode::Forth);
-    let reverse_intent = matches!(throttle, ThrottleMode::Back);
-
-    let a = if reverse_intent && vehicle_state.velocity > 0.01 {
-        // reverse pressed but still moving forward: brake first
-        -vehicle_config.brake_decel
-    } else if accel_intent && vehicle_state.velocity >= 0.0 {
-        let gear = &vehicle_config.gears[vehicle_state.current_gear];
-        gear.max_acceleration
-            * (1.0 - (vehicle_state.velocity / gear.max_velocity).powf(vehicle_config.n))
-    } else if reverse_intent {
-        // at/near rest, or already reversing
-        let g = &vehicle_config.reverse;
-        -g.max_acceleration
-            * (1.0 - (vehicle_state.velocity.abs() / g.max_velocity).powf(vehicle_config.n))
-    } else {
-        // coasting: drag toward 0
-        -vehicle_state.velocity.signum() * vehicle_config.coast_decel
+    let (Ok(vehicle), Ok((mut transform, mut camera_settings, mut camera_intent))) =
+        (q_vehicle.single(), q_camera.single_mut())
+    else {
+        return;
     };
-
-    vehicle_state.velocity += a * dt;
-
-    // gear shifting (simple threshold version)
-    if vehicle_state.velocity > 0.0 {
-        let gear = &vehicle_config.gears[vehicle_state.current_gear];
-        if vehicle_state.velocity > gear.max_velocity * vehicle_config.shift_up_ratio
-            && vehicle_state.current_gear + 1 < vehicle_config.gears.len()
-        {
-            vehicle_state.current_gear += 1;
-        } else if vehicle_state.current_gear > 0 {
-            let lower = &vehicle_config.gears[vehicle_state.current_gear - 1];
-            if vehicle_state.velocity < lower.max_velocity * vehicle_config.shift_down_ratio {
-                vehicle_state.current_gear -= 1;
-            }
-        }
+    if camera_intent.zoom > 0 {
+        camera_settings.offset.increase();
+    } else if camera_intent.zoom < 0 {
+        camera_settings.offset.decrease();
     }
+    camera_intent.reset();
+    // Follow the heading only, so the camera does not pitch and roll with the chassis.
+    transform.translation =
+        camera_settings.get_position(heading(vehicle.rotation), vehicle.translation);
+    transform.look_at(vehicle.translation, Vec3::Y);
 }
