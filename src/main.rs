@@ -5,7 +5,8 @@ use bevy::{
 };
 use simulator::{
     CameraSettings,
-    state::AppState,
+    state::{AppState, PauseState},
+    style::{self, StylePlugin},
     vehicle::{
         CameraIntent, ControlProfile, Controlled, LiftMode, MouseMode, ThrottleMode, Vehicle,
         VehicleConfig, VehicleIntent, VehicleState, cube::Cube,
@@ -16,7 +17,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .init_state::<AppState>()
-        .add_plugins(Simulator)
+        .init_state::<PauseState>()
+        .add_plugins((StylePlugin, Simulator))
         .run();
 }
 
@@ -24,22 +26,31 @@ pub struct Simulator;
 
 impl Plugin for Simulator {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup).add_systems(
-            Update,
-            (
-                grab_mouse,
-                gather_vehicle_input,
-                gather_camera_input,
-                drive_cube,
-            ),
-        );
+        app.add_systems(Startup, setup)
+            .add_systems(OnEnter(PauseState::Paused), spawn_pause_menu)
+            .add_systems(
+                Update,
+                (
+                    gather_other_input,
+                    (gather_vehicle_input, gather_camera_input, drive_cube)
+                        .run_if(in_state(PauseState::Running)),
+                    handle_pause_menu.run_if(in_state(PauseState::Paused)),
+                ),
+            );
     }
+}
+
+#[derive(Component)]
+enum PauseMenuButton {
+    Resume,
+    Exit,
 }
 
 fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let vehicle = Vehicle::new(Vec3::ZERO + Vec3::new(0., 0.5, 0.), 2., Quat::default());
     let camera_settings = CameraSettings::default();
@@ -68,6 +79,10 @@ fn setup(
         VehicleIntent::default(),
         VehicleState::default(),
     ));
+    commands.spawn((
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("truck.glb"))),
+        Transform::default(),
+    ));
     // sky
     commands.spawn((
         Mesh3d(meshes.add(Sphere::default())),
@@ -92,19 +107,85 @@ fn setup(
     commands.spawn((PointLight { ..default() }, Transform::from_xyz(0., 10., 0.)));
 }
 
-fn grab_mouse(
+fn gather_other_input(
     mut cursor_options: Single<&mut CursorOptions>,
     mouse: Res<ButtonInput<MouseButton>>,
     key: Res<ButtonInput<KeyCode>>,
+    pause_state: Res<State<PauseState>>,
+    mut next_pause_state: ResMut<NextState<PauseState>>,
 ) {
-    if mouse.just_pressed(MouseButton::Left) {
-        cursor_options.visible = false;
-        cursor_options.grab_mode = CursorGrabMode::Confined;
+    match pause_state.get() {
+        PauseState::Running => {
+            if mouse.just_pressed(MouseButton::Left) {
+                grab_cursor(&mut cursor_options);
+            }
+            if key.just_pressed(KeyCode::Escape) {
+                release_cursor(&mut cursor_options);
+                next_pause_state.set(PauseState::Paused);
+            }
+        }
+        PauseState::Paused => {
+            if key.just_pressed(KeyCode::Escape) {
+                grab_cursor(&mut cursor_options);
+                next_pause_state.set(PauseState::Running);
+            }
+        }
     }
+}
 
-    if key.just_pressed(KeyCode::Escape) {
-        cursor_options.visible = true;
-        cursor_options.grab_mode = CursorGrabMode::None;
+fn grab_cursor(cursor_options: &mut CursorOptions) {
+    cursor_options.visible = false;
+    cursor_options.grab_mode = CursorGrabMode::Confined;
+}
+
+fn release_cursor(cursor_options: &mut CursorOptions) {
+    cursor_options.visible = true;
+    cursor_options.grab_mode = CursorGrabMode::Confined;
+}
+
+fn spawn_pause_menu(mut commands: Commands) {
+    commands
+        .spawn((
+            DespawnOnExit(PauseState::Paused),
+            Node {
+                width: Val::Percent(100.),
+                height: Val::Percent(100.),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(12.),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0., 0., 0., 0.6)),
+        ))
+        .with_children(|parent| {
+            for (button, label) in [
+                (PauseMenuButton::Resume, "Resume"),
+                (PauseMenuButton::Exit, "Exit"),
+            ] {
+                parent.spawn((button, style::button(label)));
+            }
+        });
+}
+
+fn handle_pause_menu(
+    mut cursor_options: Single<&mut CursorOptions>,
+    q: Query<(&Interaction, &PauseMenuButton), Changed<Interaction>>,
+    mut next_pause_state: ResMut<NextState<PauseState>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for (interaction, button) in &q {
+        if *interaction == Interaction::Pressed {
+            match button {
+                PauseMenuButton::Resume => {
+                    grab_cursor(&mut cursor_options);
+                    next_pause_state.set(PauseState::Running);
+                }
+                PauseMenuButton::Exit => {
+                    exit.write(AppExit::Success);
+                }
+            }
+        }
     }
 }
 

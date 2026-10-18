@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 pub mod state;
+pub mod style;
 pub mod vehicle;
 
 #[derive(Debug, Component, Deref, DerefMut)]

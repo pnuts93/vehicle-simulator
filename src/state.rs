@@ -15,3 +15,11 @@ pub enum InGameState {
     Driving,
     PickingSpawn,
 }
+
+/// Independent of `AppState` so pausing never triggers `DespawnOnExit(AppState::InGame)`.
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub enum PauseState {
+    #[default]
+    Running,
+    Paused,
+}
