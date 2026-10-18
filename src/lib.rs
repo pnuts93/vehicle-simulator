@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod radial_menu;
 pub mod state;
 pub mod style;
 pub mod vehicle;

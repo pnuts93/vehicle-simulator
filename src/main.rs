@@ -5,6 +5,7 @@ use bevy::{
 };
 use simulator::{
     CameraSettings,
+    radial_menu::{Icon, OptionConfig, RadialMenuAppExt, RadialMenuPlugin, RadialMenuState},
     state::{AppState, PauseState},
     style::{self, StylePlugin},
     vehicle::{
@@ -18,7 +19,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .init_state::<AppState>()
         .init_state::<PauseState>()
-        .add_plugins((StylePlugin, Simulator))
+        .add_plugins((StylePlugin, RadialMenuPlugin, Simulator))
         .run();
 }
 
@@ -26,18 +27,34 @@ pub struct Simulator;
 
 impl Plugin for Simulator {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup)
-            .add_systems(OnEnter(PauseState::Paused), spawn_pause_menu)
-            .add_systems(
-                Update,
+        app.add_radial_menu_option(
+            OptionConfig::new(
+                Icon::Image("icons/vehicle-options.png".into()),
+                "Change vehicle",
+            ),
+            change_vehicle,
+        )
+        .add_systems(Startup, setup)
+        .add_systems(OnEnter(PauseState::Paused), spawn_pause_menu)
+        .add_systems(
+            Update,
+            (
+                gather_other_input,
                 (
-                    gather_other_input,
-                    (gather_vehicle_input, gather_camera_input, drive_cube)
-                        .run_if(in_state(PauseState::Running)),
-                    handle_pause_menu.run_if(in_state(PauseState::Paused)),
-                ),
-            );
+                    (gather_vehicle_input, gather_camera_input)
+                        .run_if(in_state(RadialMenuState::Closed)),
+                    drive_cube,
+                )
+                    .run_if(in_state(PauseState::Running)),
+                handle_pause_menu.run_if(in_state(PauseState::Paused)),
+            ),
+        );
     }
+}
+
+/// Radial menu handler; placeholder until vehicle switching exists.
+fn change_vehicle() {
+    info!("Radial menu: change vehicle selected (not implemented yet)");
 }
 
 #[derive(Component)]
@@ -80,7 +97,7 @@ fn setup(
         VehicleState::default(),
     ));
     commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("truck.glb"))),
+        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/truck.glb"))),
         Transform::default(),
     ));
     // sky
