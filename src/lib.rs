@@ -4,6 +4,7 @@ pub mod radial_menu;
 pub mod state;
 pub mod style;
 pub mod vehicle;
+pub mod vehicle_picker;
 
 #[derive(Debug, Component, Deref, DerefMut)]
 pub struct CameraSensitivity(Vec2);

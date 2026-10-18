@@ -12,6 +12,7 @@ use simulator::{
         CameraIntent, ControlProfile, Controlled, LiftMode, MouseMode, ThrottleMode, Vehicle,
         VehicleConfig, VehicleIntent, VehicleState, cube::Cube,
     },
+    vehicle_picker::{CubeAssets, VehiclePickerPlugin, VehiclePickerState},
 };
 
 fn main() {
@@ -19,7 +20,12 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .init_state::<AppState>()
         .init_state::<PauseState>()
-        .add_plugins((StylePlugin, RadialMenuPlugin, Simulator))
+        .add_plugins((
+            StylePlugin,
+            RadialMenuPlugin,
+            VehiclePickerPlugin,
+            Simulator,
+        ))
         .run();
 }
 
@@ -39,10 +45,11 @@ impl Plugin for Simulator {
         .add_systems(
             Update,
             (
-                gather_other_input,
+                gather_other_input.run_if(in_state(VehiclePickerState::Closed)),
                 (
                     (gather_vehicle_input, gather_camera_input)
-                        .run_if(in_state(RadialMenuState::Closed)),
+                        .run_if(in_state(RadialMenuState::Closed))
+                        .run_if(in_state(VehiclePickerState::Closed)),
                     drive_cube,
                 )
                     .run_if(in_state(PauseState::Running)),
@@ -52,9 +59,9 @@ impl Plugin for Simulator {
     }
 }
 
-/// Radial menu handler; placeholder until vehicle switching exists.
-fn change_vehicle() {
-    info!("Radial menu: change vehicle selected (not implemented yet)");
+/// Radial menu handler: opens the vehicle picker.
+fn change_vehicle(mut next_state: ResMut<NextState<VehiclePickerState>>) {
+    next_state.set(VehiclePickerState::Open);
 }
 
 #[derive(Component)]
@@ -67,7 +74,7 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
+    cube: Res<CubeAssets>,
 ) {
     let vehicle = Vehicle::new(Vec3::ZERO + Vec3::new(0., 0.5, 0.), 2., Quat::default());
     let camera_settings = CameraSettings::default();
@@ -85,8 +92,8 @@ fn setup(
     // cube
     commands.spawn((
         DespawnOnExit(AppState::InGame),
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-        MeshMaterial3d(materials.add(Color::srgb_u8(255, 25, 25))),
+        Mesh3d(cube.mesh.clone()),
+        MeshMaterial3d(cube.material.clone()),
         Transform::from_translation(vehicle.spawn),
         vehicle,
         Cube {},
@@ -95,10 +102,6 @@ fn setup(
         Cube::generate_vehicle_config(),
         VehicleIntent::default(),
         VehicleState::default(),
-    ));
-    commands.spawn((
-        WorldAssetRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/truck.glb"))),
-        Transform::default(),
     ));
     // sky
     commands.spawn((
