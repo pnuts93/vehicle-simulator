@@ -315,9 +315,12 @@ fn apply_drive_input(
         input.throttle = direction;
         input.brake = 0.;
     }
-    let target_steer = (intent.lateral as f32).clamp(-1., 1.);
-    let max_delta = config.steer_rate * time.delta_secs();
-    input.steer += (target_steer - input.steer).clamp(-max_delta, max_delta);
+    input.steer = config.steering.update(
+        input.steer,
+        (intent.lateral as f32).clamp(-1., 1.),
+        forward_speed,
+        time.delta_secs(),
+    );
     intent.reset();
 }
 

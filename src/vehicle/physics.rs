@@ -187,6 +187,26 @@ impl MagicFormula {
         let bs = self.b * slip;
         (self.c * (bs - self.e * (bs - bs.atan())).atan()).sin()
     }
+
+    /// Slip at which the curve peaks. The sine peaks where its argument reaches π/2, i.e. where
+    /// `x − E·(x − atan x)` (with `x = B·slip`) reaches `tan(π / 2C)`; solved by bisection.
+    /// Curves with `C ≤ 1` never peak and report π/2.
+    pub fn peak_slip(&self) -> f32 {
+        if self.c <= 1. {
+            return FRAC_PI_2;
+        }
+        let target = (FRAC_PI_2 / self.c).tan();
+        let (mut low, mut high) = (0_f32, 1000_f32);
+        for _ in 0..50 {
+            let x = (low + high) / 2.;
+            if x - self.e * (x - x.atan()) < target {
+                low = x;
+            } else {
+                high = x;
+            }
+        }
+        low / self.b
+    }
 }
 
 /// Constant-power engine without a gearbox: wheel torque is capped by `max_torque` at low wheel
@@ -205,6 +225,62 @@ impl Engine {
     /// Torque shared by all driven wheels at `throttle` (-1 to 1) and wheel `spin`, in N·m.
     pub fn drive_torque(&self, throttle: f32, spin: f32) -> f32 {
         throttle * (self.max_power / spin.abs().max(f32::EPSILON)).min(self.max_torque)
+    }
+}
+
+/// How keyboard steering moves the driver's steering position, and how far the wheels turn.
+///
+/// Keys move the steering gradually and it stays roughly where it was left: releasing a key lets
+/// it drift slowly back to centre, the opposite key brings it back quickly.
+#[derive(Clone, Copy)]
+pub struct Steering {
+    /// Wheel angle at full lock, in rad.
+    pub max_angle: f32,
+    /// Speed of the steering position while a key is held, at standstill, in full locks per s.
+    pub attack_rate: f32,
+    /// Speed at which the attack rate has halved, in m/s; it keeps falling as `1 / (1 + v / this)`.
+    pub attack_speed_reference: f32,
+    /// Speed of the return to centre while the opposite key is held, in full locks per s.
+    pub return_rate: f32,
+    /// Speed of the drift back to centre with no key held, in full locks per s.
+    pub drift_rate: f32,
+    /// Take lock away whenever more would push the tyre past its peak slip angle.
+    pub grip_assist: bool,
+}
+
+impl Steering {
+    /// Steering position (-1 right to 1 left) after `dt` with `direction` held (-1, 0 or 1).
+    pub fn update(&self, steer: f32, direction: f32, speed: f32, dt: f32) -> f32 {
+        if direction == 0. {
+            approach(steer, 0., self.drift_rate * dt)
+        } else if steer * direction < 0. {
+            approach(steer, 0., self.return_rate * dt)
+        } else {
+            let rate = self.attack_rate / (1. + speed.abs() / self.attack_speed_reference);
+            approach(steer, direction, rate * dt)
+        }
+    }
+
+    /// Reduces the wheel angle `steer` so the tyre's slip angle stays within `peak_slip_angle`,
+    /// given the wheel's `velocity` in chassis space. Past the peak more lock only scrubs speed.
+    /// It only ever takes lock away, never steers on its own.
+    pub fn limit_to_grip(steer: f32, velocity: Vec3, peak_slip_angle: f32) -> f32 {
+        let ground = Vec2::new(velocity.x, velocity.z);
+        // Slow enough and the slip stays small whatever the angle (see `Tyre::slip`).
+        let max_deviation = (peak_slip_angle.tan() * LOW_SPEED / ground.length())
+            .min(1.)
+            .asin()
+            .max(peak_slip_angle);
+        // Where the wheel is going, as a steering angle; when reversing it lines up with its
+        // backwards motion.
+        let ground = if ground.y < 0. { -ground } else { ground };
+        let travel = ground.x.atan2(ground.y);
+        let limited = steer.clamp(travel - max_deviation, travel + max_deviation);
+        if steer >= 0. {
+            limited.clamp(0., steer)
+        } else {
+            limited.clamp(steer, 0.)
+        }
     }
 }
 
@@ -293,10 +369,18 @@ fn simulate_wheels(
         let tyre = config.tyre;
         let reach = config.suspension.rest_length + tyre.radius;
         let driven_wheels = config.wheels.iter().filter(|mount| mount.driven).count() as f32;
+        let peak_slip_angle = tyre.lateral.peak_slip();
 
         for (mount, wheel) in config.wheels.iter().zip(&mut state.wheels) {
+            let origin = position + rotation * mount.position;
             wheel.steer = if mount.steered {
-                input.steer * config.max_steer_angle
+                let steer = input.steer * config.steering.max_angle;
+                if config.steering.grip_assist {
+                    let velocity = rotation.inverse() * forces.velocity_at_point(origin);
+                    Steering::limit_to_grip(steer, velocity, peak_slip_angle)
+                } else {
+                    steer
+                }
             } else {
                 0.
             };
@@ -306,7 +390,6 @@ fn simulate_wheels(
                 spin += torque / tyre.inertia * dt;
             }
 
-            let origin = position + rotation * mount.position;
             if let Some(hit) = spatial_query.cast_ray(origin, down, reach, true, &filter) {
                 let point = origin + down * hit.distance;
                 // The damper reacts to how fast the suspension length changes. (The chassis

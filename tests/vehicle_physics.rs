@@ -9,7 +9,7 @@ use simulator::{
     state::PauseState,
     surface::Surface,
     vehicle::{
-        Controlled, DriveInput, VehicleState,
+        Controlled, DriveInput, VehicleConfig, VehicleState,
         cube::Cube,
         physics::{PhysicsDebug, VehiclePhysicsPlugin},
     },
@@ -66,6 +66,28 @@ fn speed(app: &App, vehicle: Entity) -> Vec3 {
     app.world().get::<LinearVelocity>(vehicle).unwrap().0
 }
 
+/// Holds a steering key (1 left, -1 right) for `seconds`, through the vehicle's keyboard steering
+/// model like the game does. Returns the largest body slip angle seen, in rad.
+fn hold_steering(app: &mut App, vehicle: Entity, direction: f32, seconds: f32) -> f32 {
+    let steering = app.world().get::<VehicleConfig>(vehicle).unwrap().steering;
+    let mut max_body_slip: f32 = 0.;
+    for _ in 0..(seconds / STEP.as_secs_f32()) as usize {
+        let velocity = speed(app, vehicle);
+        let forward = transform(app, vehicle).rotation * Vec3::Z;
+        let input = &mut *app.world_mut().get_mut::<DriveInput>(vehicle).unwrap();
+        input.steer = steering.update(
+            input.steer,
+            direction,
+            velocity.dot(forward),
+            STEP.as_secs_f32(),
+        );
+        app.update();
+        let body_slip = forward.cross(velocity).y.atan2(forward.dot(velocity));
+        max_body_slip = max_body_slip.max(body_slip.abs());
+    }
+    max_body_slip
+}
+
 #[test]
 fn settles_drives_and_steers() {
     let (mut app, vehicle) = app(Surface::ASPHALT);
@@ -84,8 +106,7 @@ fn settles_drives_and_steers() {
     assert!(v.z > 5. && v.z < 20., "forward speed {}", v.z);
     assert!(v.x.abs() < 0.5, "drifting sideways {}", v.x);
 
-    app.world_mut().get_mut::<DriveInput>(vehicle).unwrap().steer = 1.;
-    run(&mut app, 1.5);
+    hold_steering(&mut app, vehicle, 1., 1.5);
     let turned = transform(&app, vehicle);
     let forward = turned.rotation * Vec3::Z;
     println!("after steering left: forward {forward:?}, up {:?}", turned.rotation * Vec3::Y);
@@ -122,4 +143,79 @@ fn grip_depends_on_surface() {
     // On ice the tyres can't transmit the engine's torque: the car is slower and the wheels spin.
     assert!(ice_speed < asphalt_speed * 0.4, "ice not slower");
     assert!(ice_slip > asphalt_slip * 5. && ice_slip > 2., "wheels not spinning on ice");
+}
+
+#[test]
+fn lateral_tyre_curve_peaks_near_8_degrees() {
+    let curve = Cube::generate_vehicle_config().tyre.lateral;
+    let peak = curve.peak_slip();
+    println!("peak slip angle {:.2}°", peak.to_degrees());
+    assert!((peak.to_degrees() - 8.27).abs() < 0.1);
+    assert!(curve.eval(peak) > 0.9999);
+    assert!(curve.eval(peak - 0.01) < curve.eval(peak) && curve.eval(peak + 0.01) < curve.eval(peak));
+}
+
+#[test]
+fn keyboard_steering_holds_drifts_and_returns() {
+    let steering = Cube::generate_vehicle_config().steering;
+    let dt = 1. / 60.;
+    let hold = |mut steer: f32, direction: f32, speed: f32, seconds: f32| {
+        for _ in 0..(seconds / dt).round() as usize {
+            steer = steering.update(steer, direction, speed, dt);
+        }
+        steer
+    };
+    // Half a second of A at standstill: half lock.
+    let steer = hold(0., 1., 0., 0.5);
+    assert!((steer - 0.5).abs() < 0.01, "{steer}");
+    // Released for a second: mostly held, drifting slowly back.
+    let released = hold(steer, 0., 0., 1.);
+    assert!((released - 0.2).abs() < 0.01, "{released}");
+    // D brings it back to centre quickly, then steers right.
+    let returned = hold(released, -1., 0., 4. * dt);
+    assert!(returned.abs() < 0.01, "{returned}");
+    assert!(hold(returned, -1., 0., 0.2) < -0.15);
+    // At 10 m/s the same half second only gives a quarter lock.
+    let fast = hold(0., 1., 10., 0.5);
+    assert!((fast - 0.25).abs() < 0.01, "{fast}");
+}
+
+/// Heading change, front wheel angle and largest body slip angle after holding left for 2 s,
+/// coasting from ~15 m/s.
+fn turn_at_speed(grip_assist: bool) -> (f32, f32, f32) {
+    let (mut app, vehicle) = app(Surface::ASPHALT);
+    app.world_mut()
+        .get_mut::<VehicleConfig>(vehicle)
+        .unwrap()
+        .steering
+        .grip_assist = grip_assist;
+    run(&mut app, 2.);
+    app.world_mut().get_mut::<DriveInput>(vehicle).unwrap().throttle = 1.;
+    run(&mut app, 3.);
+    app.world_mut().get_mut::<DriveInput>(vehicle).unwrap().throttle = 0.;
+    let max_body_slip = hold_steering(&mut app, vehicle, 1., 2.);
+    let forward = transform(&app, vehicle).rotation * Vec3::Z;
+    let wheel_angle = app.world().get::<VehicleState>(vehicle).unwrap().wheels[0].steer;
+    (forward.x.atan2(forward.z), wheel_angle, max_body_slip)
+}
+
+#[test]
+fn grip_assist_turns_tighter_at_speed() {
+    let report = |label, (heading, angle, slip): (f32, f32, f32)| {
+        println!(
+            "{label}: turned {:.1}°, wheel at {:.1}°, body slip up to {:.1}°",
+            heading.to_degrees(),
+            angle.to_degrees(),
+            slip.to_degrees()
+        );
+    };
+    let raw = turn_at_speed(false);
+    let assisted = turn_at_speed(true);
+    report("raw     ", raw);
+    report("assisted", assisted);
+    let peak = Cube::generate_vehicle_config().tyre.lateral.peak_slip();
+    assert!(assisted.1 < raw.1 * 0.6, "assist did not reduce lock");
+    assert!(assisted.1 < peak * 1.5, "wheel far past the tyre's peak");
+    assert!(assisted.0 > raw.0, "assist did not turn tighter");
+    assert!(assisted.2 < 10_f32.to_radians(), "car slid sideways");
 }

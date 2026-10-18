@@ -3,7 +3,7 @@ pub mod physics;
 
 use bevy::prelude::*;
 
-use physics::{Engine, Suspension, Tyre, WheelMount, WheelState};
+use physics::{Engine, Steering, Suspension, Tyre, WheelMount, WheelState};
 
 #[derive(Debug, Default)]
 pub enum VehicleType {
@@ -52,10 +52,7 @@ pub struct VehicleConfig {
     pub suspension: Suspension,
     pub tyre: Tyre,
     pub engine: Engine,
-    /// Steering angle of the steered wheels at full lock, in rad.
-    pub max_steer_angle: f32,
-    /// How fast the steering moves to full lock and back, in units of [`DriveInput::steer`] per s.
-    pub steer_rate: f32,
+    pub steering: Steering,
     /// Drag coefficient times frontal area, in m².
     pub drag_area: f32,
 }

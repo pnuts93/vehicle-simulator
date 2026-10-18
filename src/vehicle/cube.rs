@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use crate::vehicle::{
     ControlProfile, LiftMode, Vehicle, VehicleConfig, VehicleType,
-    physics::{Engine, MagicFormula, Suspension, Tyre, WheelMount},
+    physics::{Engine, MagicFormula, Steering, Suspension, Tyre, WheelMount},
 };
 
 /// Mass of the cube, in kg: roughly a go-kart with its driver.
@@ -79,8 +79,15 @@ impl Cube {
                 max_power: 30_000.,
                 brake_torque: 250.,
             },
-            max_steer_angle: 0.5,
-            steer_rate: 3.,
+            // A tap moves the steering a little; at 10 m/s full lock takes 2 s instead of 1 s.
+            steering: Steering {
+                max_angle: 0.5,
+                attack_rate: 1.,
+                attack_speed_reference: 10.,
+                return_rate: 3.,
+                drift_rate: 0.3,
+                grip_assist: true,
+            },
             drag_area: 0.8,
         }
     }
