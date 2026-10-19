@@ -6,6 +6,7 @@ use bevy::{
 };
 use simulator::{
     CameraSettings,
+    hud::HudPlugin,
     radial_menu::{Icon, OptionConfig, RadialMenuAppExt, RadialMenuPlugin, RadialMenuState},
     state::{AppState, PauseState},
     style::{self, StylePlugin},
@@ -25,6 +26,7 @@ fn main() {
         .init_state::<PauseState>()
         .add_plugins((
             StylePlugin,
+            HudPlugin,
             RadialMenuPlugin,
             VehiclePickerPlugin,
             VehiclePhysicsPlugin,

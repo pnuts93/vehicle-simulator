@@ -332,6 +332,7 @@ pub struct WheelContact {
     /// Tyre force in the ground plane, in N.
     pub tyre_force: Vec3,
     pub slip: Slip,
+    pub surface: Surface,
 }
 
 /// Moves `value` towards `target` by at most `max_delta`, without overshooting.
@@ -414,6 +415,7 @@ fn simulate_wheels(
                     load,
                     tyre_force,
                     slip,
+                    surface,
                 });
             } else {
                 // Airborne: the wheel only spins up from the engine and slows from the brakes.
