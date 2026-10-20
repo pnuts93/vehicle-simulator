@@ -78,6 +78,8 @@ impl Cube {
                 max_torque: 400.,
                 max_power: 30_000.,
                 brake_torque: 250.,
+                // About 1.5 m/s² of drag with all four wheels gripping.
+                idle_brake: 35.,
             },
             // A tap moves the steering a little; at 10 m/s full lock takes 2 s instead of 1 s.
             steering: Steering {

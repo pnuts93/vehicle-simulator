@@ -24,6 +24,10 @@ pub const RESET_KEY: KeyCode = KeyCode::KeyR;
 const AIR_DENSITY: f32 = 1.225;
 /// Floor for the speed that slip is measured against; below it the slip definitions blow up.
 const LOW_SPEED: f32 = 1.0;
+/// Cosine of the angle between chassis `up` and ground normal beyond which the suspension ignores
+/// the normal (45°), and below which it follows it completely (30°).
+const STEEP_NORMAL_COS: f32 = 0.707;
+const GENTLE_NORMAL_COS: f32 = 0.866;
 /// Length of a debug force arrow per newton.
 const FORCE_GIZMO_SCALE: f32 = 1. / 1000.;
 
@@ -83,6 +87,23 @@ impl Suspension {
     /// never pull the chassis down.
     pub fn load(&self, compression: f32, compression_speed: f32) -> f32 {
         (self.stiffness * compression + self.damping * compression_speed).max(0.)
+    }
+
+    /// Unit direction of the suspension force: the ground normal, as a contact force should be,
+    /// so it stays orthogonal to the tyre force. Surfaces steeper than `STEEP_NORMAL` from the
+    /// chassis' `up` (walls, edges) would shove the car sideways, so they blend back to `up`.
+    pub fn force_direction(up: Vec3, normal: Vec3) -> Vec3 {
+        let alignment = up.dot(normal);
+        let t = ((alignment - STEEP_NORMAL_COS) / (GENTLE_NORMAL_COS - STEEP_NORMAL_COS))
+            .clamp(0., 1.);
+        let t = t * t * (3. - 2. * t);
+        up.lerp(normal, t).normalize_or(up)
+    }
+
+    /// Factor turning a length measured along the (chassis-aligned) ray into one measured along
+    /// the force direction: an oblique ray is longer than the distance to the surface.
+    pub fn oblique_scale(up: Vec3, normal: Vec3) -> f32 {
+        up.dot(normal).clamp(0.5, 1.)
     }
 }
 
@@ -219,6 +240,9 @@ pub struct Engine {
     pub max_power: f32,
     /// Brake torque per wheel at full brake, in N·m.
     pub brake_torque: f32,
+    /// Drag braking per wheel while neither throttle nor brake is pressed, in N·m. Spread over
+    /// all wheels rather than the driven ones, so lifting off in a corner does not unsettle the rear.
+    pub idle_brake: f32,
 }
 
 impl Engine {
@@ -397,8 +421,12 @@ fn simulate_wheels(
                 // velocity along its up axis is not that: once the body pitches or rolls, part
                 // of the forward speed shows up in it.)
                 let compression = reach - hit.distance;
+                let scale = Suspension::oblique_scale(up, hit.normal);
                 let compression_speed = (compression - wheel.compression) / dt;
-                let load = config.suspension.load(compression, compression_speed);
+                let load = config
+                    .suspension
+                    .load(compression * scale, compression_speed * scale);
+                let load_direction = Suspension::force_direction(up, hit.normal);
 
                 let axle = rotation * Quat::from_rotation_y(wheel.steer) * Vec3::X;
                 let patch = ContactPatch::new(axle, hit.normal, forces.velocity_at_point(point));
@@ -406,7 +434,7 @@ fn simulate_wheels(
                 let slip = tyre.slip(&patch, spin);
                 let force = tyre.force(&patch, &slip, &surface, load, dt, g);
                 let tyre_force = patch.to_world(force);
-                forces.apply_force_at_point(up * load + tyre_force, point);
+                forces.apply_force_at_point(load_direction * load + tyre_force, point);
                 spin = tyre.react(spin, &patch, &surface, force.x, load, dt);
 
                 wheel.compression = compression;
@@ -423,7 +451,13 @@ fn simulate_wheels(
                 wheel.contact = None;
             }
 
-            let braking = input.brake * config.engine.brake_torque / tyre.inertia * dt;
+            let idle = if input.throttle == 0. && input.brake == 0. {
+                config.engine.idle_brake
+            } else {
+                0.
+            };
+            let braking =
+                (input.brake * config.engine.brake_torque + idle) / tyre.inertia * dt;
             wheel.spin = approach(spin, 0., braking);
             wheel.angle = (wheel.angle + wheel.spin * dt).rem_euclid(TAU);
         }
