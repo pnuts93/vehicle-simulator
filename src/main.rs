@@ -11,6 +11,7 @@ use simulator::{
     state::{AppState, PauseState},
     style::{self, StylePlugin},
     surface::Surface,
+    terrain::{TerrainPlugin, TerrainSlot, TerrainTileReady},
     vehicle::{
         CameraIntent, ControlProfile, Controlled, DriveInput, LiftMode, MouseMode, ThrottleMode,
         Vehicle, VehicleConfig, VehicleIntent, VehicleState, cube::Cube, heading,
@@ -30,6 +31,7 @@ fn main() {
             RadialMenuPlugin,
             VehiclePickerPlugin,
             VehiclePhysicsPlugin,
+            TerrainPlugin,
             Simulator,
         ))
         .run();
@@ -46,7 +48,8 @@ impl Plugin for Simulator {
             ),
             change_vehicle,
         )
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, hold_physics_until_terrain))
+        .add_systems(Update, release_physics_when_terrain_ready)
         .add_systems(OnEnter(PauseState::Paused), spawn_pause_menu)
         .add_systems(
             Update,
@@ -82,6 +85,7 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     cube: Res<CubeAssets>,
+    asset_server: Res<AssetServer>,
 ) {
     // Spawned a little above its resting ride height, so it settles onto its suspension.
     let vehicle = Vehicle::new(Vec3::new(0., 1., 0.), 2., Quat::default());
@@ -141,17 +145,30 @@ fn setup(
         Collider::cuboid(4., 0.5, 8.),
         Surface::CONCRETE,
     ));
-    // ground: the collider is built from whatever mesh is attached, so swapping the plane for
-    // terrain needs no collider changes
+    // ground: the only terrain tile we have, centred on the origin with its middle at y = 0
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(50.)))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
-        RigidBody::Static,
-        ColliderConstructor::TrimeshFromMesh,
-        Surface::ASPHALT,
+        TerrainSlot(asset_server.load("terrain/CA_center.tif")),
+        MeshMaterial3d(materials.add(Color::srgb_u8(110, 130, 80))),
+        Surface::GRAVEL,
     ));
     // light
     commands.spawn((PointLight { ..default() }, Transform::from_xyz(0., 10., 0.)));
+}
+
+/// Terrain loads asynchronously; until its collider exists the vehicle would fall through the void.
+fn hold_physics_until_terrain(mut time: ResMut<Time<Physics>>) {
+    time.pause();
+}
+
+fn release_physics_when_terrain_ready(
+    mut ready: MessageReader<TerrainTileReady>,
+    mut time: ResMut<Time<Physics>>,
+    pause_state: Res<State<PauseState>>,
+) {
+    // A tile becoming ready while paused is covered by the pause menu's own resume.
+    if ready.read().count() > 0 && *pause_state.get() == PauseState::Running {
+        time.unpause();
+    }
 }
 
 fn gather_other_input(

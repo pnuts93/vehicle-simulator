@@ -5,6 +5,7 @@ pub mod radial_menu;
 pub mod state;
 pub mod style;
 pub mod surface;
+pub mod terrain;
 pub mod vehicle;
 pub mod vehicle_picker;
 

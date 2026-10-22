@@ -54,14 +54,8 @@ impl Plugin for VehiclePhysicsPlugin {
 }
 
 /// Whether physics debug gizmos (colliders, wheels, forces) are drawn.
-#[derive(Resource, Deref, DerefMut)]
+#[derive(Resource, Deref, DerefMut, Default)]
 pub struct PhysicsDebug(pub bool);
-
-impl Default for PhysicsDebug {
-    fn default() -> Self {
-        Self(true)
-    }
-}
 
 /// Where a wheel sits on the chassis and what it does.
 #[derive(Clone, Copy)]
@@ -94,8 +88,8 @@ impl Suspension {
     /// chassis' `up` (walls, edges) would shove the car sideways, so they blend back to `up`.
     pub fn force_direction(up: Vec3, normal: Vec3) -> Vec3 {
         let alignment = up.dot(normal);
-        let t = ((alignment - STEEP_NORMAL_COS) / (GENTLE_NORMAL_COS - STEEP_NORMAL_COS))
-            .clamp(0., 1.);
+        let t =
+            ((alignment - STEEP_NORMAL_COS) / (GENTLE_NORMAL_COS - STEEP_NORMAL_COS)).clamp(0., 1.);
         let t = t * t * (3. - 2. * t);
         up.lerp(normal, t).normalize_or(up)
     }
@@ -456,8 +450,7 @@ fn simulate_wheels(
             } else {
                 0.
             };
-            let braking =
-                (input.brake * config.engine.brake_torque + idle) / tyre.inertia * dt;
+            let braking = (input.brake * config.engine.brake_torque + idle) / tyre.inertia * dt;
             wheel.spin = approach(spin, 0., braking);
             wheel.angle = (wheel.angle + wheel.spin * dt).rem_euclid(TAU);
         }
@@ -488,10 +481,7 @@ fn toggle_physics_debug(
 /// Puts the controlled vehicle back on its wheels, keeping its heading.
 fn reset_vehicle(
     key: Res<ButtonInput<KeyCode>>,
-    mut q: Query<
-        (&mut Transform, &mut LinearVelocity, &mut AngularVelocity),
-        With<Controlled>,
-    >,
+    mut q: Query<(&mut Transform, &mut LinearVelocity, &mut AngularVelocity), With<Controlled>>,
 ) {
     if !key.just_pressed(RESET_KEY) {
         return;
@@ -506,10 +496,7 @@ fn reset_vehicle(
 
 /// Draws each wheel at its suspension position with a spoke showing its spin, plus the
 /// suspension (green) and tyre (orange) forces at the contact point.
-fn draw_wheel_gizmos(
-    mut gizmos: Gizmos,
-    q: Query<(&Transform, &VehicleConfig, &VehicleState)>,
-) {
+fn draw_wheel_gizmos(mut gizmos: Gizmos, q: Query<(&Transform, &VehicleConfig, &VehicleState)>) {
     for (transform, config, state) in &q {
         for (mount, wheel) in config.wheels.iter().zip(&state.wheels) {
             let hub = transform.transform_point(
