@@ -1,6 +1,7 @@
 use avian3d::prelude::*;
 use bevy::{
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
+    light::CascadeShadowConfigBuilder,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
 };
@@ -93,6 +94,12 @@ fn setup(
     let camera_settings = CameraSettings::default();
     // Resources
     commands.insert_resource(MouseMode::CameraAndSteer);
+    // Sky-tinted fill so shadowed sides are not black.
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::srgb(0.6, 0.75, 1.0),
+        brightness: 400.,
+        ..default()
+    });
     // camera
     commands.spawn((
         DespawnOnExit(AppState::InGame),
@@ -151,8 +158,25 @@ fn setup(
         MeshMaterial3d(materials.add(Color::srgb_u8(110, 130, 80))),
         Surface::GRAVEL,
     ));
-    // light
-    commands.spawn((PointLight { ..default() }, Transform::from_xyz(0., 10., 0.)));
+    // sun: only its direction matters. Cascades keep shadows sharp near the vehicle and still
+    // reach across the terrain.
+    commands.spawn((
+        DespawnOnExit(AppState::InGame),
+        DirectionalLight {
+            illuminance: light_consts::lux::AMBIENT_DAYLIGHT,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::default().looking_to(Vec3::new(-0.4, -0.7, -0.5), Vec3::Y),
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            minimum_distance: 0.1,
+            first_cascade_far_bound: 15.,
+            maximum_distance: 300.,
+            ..default()
+        }
+        .build(),
+    ));
 }
 
 /// Terrain loads asynchronously; until its collider exists the vehicle would fall through the void.
